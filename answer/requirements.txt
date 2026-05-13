@@ -1,0 +1,19 @@
+# Telemetry Analysis Case Study — Dependencies
+#
+# Purpose: Pinned dependencies for reproducible analysis.
+#
+# From the case study:
+# > "Instructions for reproducing your analysis"
+# > "You may use any programming language, tools, or frameworks
+# >  you're comfortable with"
+
+pandas==3.0.2
+numpy==2.4.4
+matplotlib==3.10.9
+seaborn==0.13.2
+plotly==6.1.2
+jupyter==1.1.1
+ipykernel==7.2.0
+scipy==1.15.3
+ydata-profiling==4.18.4
+setuptools==74.1.3

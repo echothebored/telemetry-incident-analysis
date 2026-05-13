@@ -1,0 +1,159 @@
+# Proposed Alert Rules
+#
+# Derived from observed incidents and detection gap analysis (report.md Section 3.2).
+# Format follows Prometheus/Alertmanager conventions.
+#
+# Each rule maps to a detection channel identified in the analysis.
+# Thresholds are calibrated against observed baseline and incident data.
+
+groups:
+  - name: availability
+    rules:
+      # Channel 1: Burn-rate alerting (SLI-1)
+      # Catches sustained degradation. Does NOT page for 60-second acute incidents
+      # (1.7-2.2x burn at viable targets — review tier only).
+      - alert: HighErrorBudgetBurn_Page
+        expr: >
+          (
+            sum(rate(http_requests_total{status=~"5.."}[1h]))
+            /
+            sum(rate(http_requests_total[1h]))
+          ) / (1 - {{ SLO_TARGET }}) > 14.4
+        for: 2m
+        labels:
+          severity: page
+          channel: burn_rate
+        annotations:
+          summary: "Error budget burning at >14.4x (1h window)"
+          description: "At this rate, the entire monthly error budget will be consumed in ~2 days."
+
+      - alert: HighErrorBudgetBurn_Sustained
+        expr: >
+          (
+            sum(rate(http_requests_total{status=~"5.."}[6h]))
+            /
+            sum(rate(http_requests_total[6h]))
+          ) / (1 - {{ SLO_TARGET }}) > 6
+        for: 5m
+        labels:
+          severity: page
+          channel: burn_rate
+        annotations:
+          summary: "Error budget burning at >6x (6h window)"
+
+      - alert: HighErrorBudgetBurn_Ticket
+        expr: >
+          (
+            sum(rate(http_requests_total{status=~"5.."}[1d]))
+            /
+            sum(rate(http_requests_total[1d]))
+          ) / (1 - {{ SLO_TARGET }}) > 3
+        for: 10m
+        labels:
+          severity: ticket
+          channel: burn_rate
+        annotations:
+          summary: "Error budget burning at >3x (1d window)"
+
+      # Channel 2: Acute 5xx spike (threshold-based)
+      # Complements burn rate for short severe incidents.
+      # REQUIRES 5-second scrape interval. At 10s, the 2-consecutive rule
+      # never fires for <15-second acute phases like incident 1.
+      - alert: Acute5xxSpike
+        expr: >
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5s]))
+            /
+            sum(rate(http_requests_total[5s]))
+          ) > 3 * 0.0311
+        for: 10s  # 2 consecutive 5s bins
+        labels:
+          severity: page
+          channel: acute_threshold
+        annotations:
+          summary: "5xx rate exceeds 3x baseline ({{ $value | humanizePercentage }}) for 10s+"
+          description: >
+            Threshold: 9.3% (3x baseline 3.11%).
+            Incident 1 detection: alert fires ~10s after first 503 at 5s granularity.
+            At 10s granularity, the 2-consecutive rule never fires for this failure mode.
+
+  - name: rate_limiting
+    rules:
+      # Channel 3: Rate limiter activity
+      # Catches contained incidents invisible to 5xx/latency monitoring.
+      # Incident 2 was completely invisible to channels 1-2.
+      - alert: RateLimiterActive
+        expr: sum(rate(http_requests_total{status="429"}[1m])) > 0
+        for: 30s
+        labels:
+          severity: warning
+          channel: rate_limiter
+        annotations:
+          summary: "Rate limiter is issuing 429s ({{ $value }} req/s)"
+          description: >
+            429s transitioned from 0 to non-zero. May indicate a client burst
+            or misconfigured rate limits. Check per-client breakdown to determine
+            if single-client (contained) or distributed (potential DDoS).
+
+  - name: traffic
+    rules:
+      # Channel 4: Traffic volume anomaly
+      # High false-positive risk — threshold requires operational tuning.
+      - alert: TrafficVolumeAnomaly
+        expr: >
+          sum(rate(http_requests_total[5s])) > 2 * 150.2
+        for: 10s  # 2 consecutive bins
+        labels:
+          severity: warning
+          channel: traffic_volume
+        annotations:
+          summary: "Request rate exceeds 2x baseline ({{ $value }} req/s vs 150.2 baseline)"
+          description: >
+            Incident 2 traffic reached 2.07x baseline. Rate limiter contained it,
+            but a larger or distributed surge might not. Verify: single client or distributed?
+
+  - name: per_server
+    rules:
+      # Channel 5: Per-server divergence
+      # Essential at scale — with 3 servers, single-server failure is still
+      # visible in aggregate (29% peak). With 100 servers, it becomes invisible.
+      - alert: ServerDivergence
+        expr: >
+          (
+            sum(rate(http_requests_total{status=~"5.."}[30s])) by (server_id)
+            /
+            sum(rate(http_requests_total[30s])) by (server_id)
+          )
+          -
+          ignoring(server_id) group_left
+          (
+            sum(rate(http_requests_total{status=~"5.."}[30s]))
+            /
+            sum(rate(http_requests_total[30s]))
+          )
+          > 0.10
+        for: 30s
+        labels:
+          severity: warning
+          channel: per_server
+        annotations:
+          summary: "Server {{ $labels.server_id }} 5xx rate diverging from fleet by >10pp"
+          description: >
+            During incident 1, service-1 hit 96.5% while service-2/3 stayed at 3%.
+            Aggregate peaked at 29%. Per-server monitoring catches partial failures
+            that aggregate metrics dilute.
+
+# Implementation notes:
+#
+# 1. {{ SLO_TARGET }} is a template variable — set to the chosen target from
+#    slo_definitions.yaml (recommended starting range: 0.95-0.96).
+#
+# 2. Channel 2 requires 5-second scrape interval. Default Prometheus scrape
+#    interval is 15s — must be reduced for this system's failure mode.
+#
+# 3. Start with Channels 1 + 2. Add 3-5 based on operational experience.
+#    Channel 2 is the faster detector for this system's observed failure mode.
+#    Channel 1 protects against sustained degradation not observed in this window.
+#
+# 4. Baseline values (3.11% 5xx, 150.2 req/s) are from a 10-minute observation
+#    window. Recalibrate after 2-4 weeks of production data.

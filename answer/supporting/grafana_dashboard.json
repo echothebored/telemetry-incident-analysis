@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Purpose: Proposed Grafana dashboard definition for monitoring this microservice system.",
+    "Demonstrates ability to go from analysis findings to actionable operational tooling.",
+    "",
+    "From the case study:",
+    "  Deliverable 3 — Supporting Materials (Optional but encouraged):",
+    "  > 'Dashboards or interactive visualizations'",
+    "",
+    "  Section 3.2 — Monitoring and Observability:",
+    "  > 'What key metrics would you monitor for this system?'",
+    "",
+    "TODO: Populate after completing Part 2 (incident analysis) and Section 3.2.",
+    "Dashboard panels will be derived directly from the metrics and visualizations",
+    "that proved most useful during our analysis."
+  ]
+}

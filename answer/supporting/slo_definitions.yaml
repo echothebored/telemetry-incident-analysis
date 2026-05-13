@@ -1,0 +1,121 @@
+# SLO/SLI Definitions
+#
+# Derived from observed baseline performance (healthy window: 18:56:00-19:01:00 UTC).
+# Format follows OpenSLO conventions where applicable.
+#
+# IMPORTANT: These are proposals, not validated targets. Final target selection
+# requires business inputs listed in report.md Section 3.1.
+
+service:
+  name: telemetry-case-study-api
+  description: Read-heavy CRUD API (users/posts) behind weighted round-robin LB
+
+slis:
+  availability:
+    name: SLI-1 Availability
+    description: Proportion of requests that do not return a 5xx status code
+    formula: count(response_status_code < 500) / count(total_requests)
+    unit: ratio
+    status_code_classification:
+      - code: 200
+        classification: success
+      - code: 404
+        classification: excluded  # normal app behavior (client requests nonexistent resources)
+      - code: 429
+        classification: excluded  # design choice — see caveats below
+      - code: 500
+        classification: failure
+      - code: 503
+        classification: failure
+    observed_baseline: 0.9689  # healthy window non-5xx rate
+    notes: >
+      429 exclusion is a design choice, not a fact. Validated only for this dataset
+      where all 429s came from a single burst client. Must be revalidated against
+      rate limiter configuration and client contracts.
+
+  latency:
+    name: SLI-2 Latency
+    description: Proportion of successful requests completing within threshold
+    formula: count(status == 200 AND duration_us <= threshold) / count(status == 200)
+    unit: ratio
+    candidate_thresholds:
+      - label: p90
+        value_us: 131225
+        value_ms: 131.2
+        healthy_within: 0.900
+        incident1_within: 0.867
+        gap_pp: 3.3
+      - label: p95
+        value_us: 175203
+        value_ms: 175.2
+        healthy_within: 0.950
+        incident1_within: 0.924
+        gap_pp: 2.6
+      - label: p95_plus_15pct
+        value_us: 201483
+        value_ms: 201.5
+        healthy_within: 0.966
+        incident1_within: 0.947
+        gap_pp: 1.9
+      - label: p99
+        value_us: 293079
+        value_ms: 293.1
+        healthy_within: 0.990
+        incident1_within: 0.980
+        gap_pp: 1.0
+    notes: >
+      Latency SLI gap between healthy and incident 1 is only 1-3pp across all
+      thresholds. For this system's observed failure modes (error-rate-dominant),
+      availability SLI is the primary detection channel. Latency SLI catches
+      brownouts, not blackouts.
+
+  quality:
+    name: SLI-3 Quality (composite)
+    description: Request is "good" only if non-5xx AND within latency threshold
+    formula: count(status < 500 AND duration_us <= latency_threshold) / count(total_requests)
+    unit: ratio
+    notes: Single metric for dashboards and error budget tracking.
+
+slo:
+  viable_target_range:
+    upper_bound: 0.9689  # observed baseline — above this is always breached
+    lower_bound: 0.914   # incident 1 window availability — below this, incident is invisible
+    recommended_starting_range: [0.95, 0.96]
+    notes: >
+      Start conservative, instrument burn-rate alerting, iterate after 2-4 weeks
+      of production data. The first SLO is a hypothesis.
+
+  error_budget_sensitivity:
+    # Burn rate = observed error rate / error budget
+    # Baseline consumption = how much of the budget the steady-state 3.11% rate uses
+    candidates:
+      - target: 0.920
+        budget: 0.080
+        baseline_consumption_pct: 38.9
+        incident1_burn_rate: 1.1
+      - target: 0.940
+        budget: 0.060
+        baseline_consumption_pct: 51.9
+        incident1_burn_rate: 1.4
+      - target: 0.950
+        budget: 0.050
+        baseline_consumption_pct: 62.3
+        incident1_burn_rate: 1.7
+      - target: 0.960
+        budget: 0.040
+        baseline_consumption_pct: 77.8
+        incident1_burn_rate: 2.2
+      - target: 0.965
+        budget: 0.035
+        baseline_consumption_pct: 88.9
+        incident1_burn_rate: 2.5
+
+  business_inputs_required:
+    - service_criticality
+    - user_tolerance
+    - cost_of_breach
+    - cost_of_over_alerting
+    - improvement_trajectory
+    - dependency_slos
+    - slo_window
+    - rate_limiter_contract
